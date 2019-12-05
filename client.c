@@ -34,7 +34,7 @@ const char hello_message_format[] = "%c %s %ld %ld %d \n";
 const char measurement_message_format[] = "%c %ld %s\n";
 
 
-// Fill the param_t based on the input parameters. return -1 in case of error
+// Fill the param_t based on the input parameters. return -1 in case of error, else return the number of paramether used
 int fillParam(int argc, char *argv[], param_t *param);
 
 // Analyze the data received from the server and verify if is ok.
@@ -127,7 +127,7 @@ int analyzeData(char *received, int probe){
     if(probe != recvProbe){
         return -1;
     }
-    return 0;
+    return 1;
 }
 
 int fillParam(int argc, char *argv[], param_t *param){
