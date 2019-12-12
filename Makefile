@@ -10,7 +10,7 @@ server: server.c
 	gcc ${CFLAGS} server.c -o server
 
 client: client.c
-	gcc ${CLFLAGS} client.c -o client
+	gcc ${CFLAGS} client.c -o client
 
 .PHONY: clean
 

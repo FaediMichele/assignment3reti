@@ -20,18 +20,17 @@
 
 typedef struct{
     char measure_type[6];
-    uint16_t port;
-    in_addr_t address;
+    struct sockaddr_in server_addr;
     int n_probes;
     long msg_size;
     int server_delay;
 } param_t;
 
 /* <protocol_phase> <sp> <measure_type> <sp> <n_probes> <sp> <msg_size> <sp> <server_delay>\n */
-const char hello_message_format[] = "%c %s %ld %ld %d \n";
+const char hello_message_format[] = "%c %s %d %ld %d";
 
 /* <protocol_phase> <sp> <probe_seq_num> <sp> <payload>\n */
-const char measurement_message_format[] = "%c %ld %s\n";
+const char measurement_message_format[] = "%c %d %s";
 
 
 // Fill the param_t based on the input parameters. return -1 in case of error, else return the number of paramether used
@@ -44,24 +43,23 @@ int analyzeData(char *received, int probe);
 int sendHello(int sfd, const param_t *param, char *sendData, char *receivedData);
 
 void startChrono(struct timeval *time){
-    gettimeofday(time, NULL);
+    if(gettimeofday(time, NULL) < 0){
+        perror("Time");
+    }
 }
 
-long long stopChrono(struct timeval *time){
+long long stopChrono(struct timeval time){
     struct timeval endTime;
-    gettimeofday(&endTime, NULL);
-    return (endTime.tv_usec - time->tv_usec) / 1000;
+    if(gettimeofday(&endTime, NULL) < 0){
+        perror("Time");
+    }
+    return (endTime.tv_usec - time.tv_usec) / 100;
 }
 
 int main(int argc, char *argv[]){
-    struct sockaddr_in server_addr; // struct containing server address information
-    struct sockaddr_in client_addr; // struct containing client address information
     int sfd; // Server socket filed descriptor
-    int cr; // Connect result
-    int stop = 0;
     ssize_t byteRecv; // Number of bytes received
     ssize_t byteSent; // Number of bytes sent
-    size_t msgLen;
     socklen_t serv_size;
     struct timeval chrono;
     long int time_all;
@@ -76,20 +74,16 @@ int main(int argc, char *argv[]){
     }
     if( fillParam(argc, argv, &param) < 0){
         printf("Errore nei parametri\n");
-        printf("%s <server IP (dotted notation)> <server port> <measure type (rtt / thput)> [-d delay][-p n_probes][-m messagesize]\n", argv[0]);
-        exit(1);
+        printf("%s <server IP (dotted notation)> <server port> <measure type(rtt / thput)> [-d delay][-p n_probes][-m messagesize]\n", argv[0]);
+        exit(EXIT_FAILURE);
     }
     char receivedData [param.msg_size]; // Data to be received
     char sendData [param.msg_size]; // Data to be sent
-    server_addr.sin_family = AF_INET;
-    server_addr.sin_port = param.port;
-    server_addr.sin_addr.s_addr = param.address;
+    int receivedProbe; // Probe received as ACK
     
-    serv_size = sizeof(server_addr);
+    serv_size = sizeof(param.server_addr);
 
-    cr = connect(sfd, (struct sockaddr *) &server_addr, sizeof(server_addr));
-
-    if (cr < 0) {
+    if (connect(sfd, (struct sockaddr *) &param.server_addr, serv_size) < 0) {
         perror("connect"); // Print error message
         exit(EXIT_FAILURE);
     }
@@ -99,35 +93,46 @@ int main(int argc, char *argv[]){
 
     // MEASURE
     int probe = 1;
+
     while(probe < param.n_probes){
-        snprintf( sendData, param.msg_size, measurement_message_format, PROTOCOL_PHASE_MEASURE, probe, "PAYLOAD START HERE:\n");
+
+        snprintf(sendData, param.msg_size, measurement_message_format, PROTOCOL_PHASE_MEASURE,
+            probe, "PAYLOAD START HERE:\n");
         startChrono(&chrono);
         byteSent = send(sfd, sendData, param.msg_size, 0);
-        probe++;
-        byteRecv = recv(sfd, receivedData, param.msg_size, 0);
-        time_all += stopChrono(&chrono);
-        if(analyzeData(receivedData, probe) < 0){
-            printf("Error due a format problem\n");
+        if( byteSent <= 0) {
+            perror("Error sending message");
+            exit(EXIT_FAILURE);
         }
+        byteRecv = recv(sfd, receivedData, param.msg_size, 0);
+        if( byteRecv <= 0){
+            perror("Error receiving message");
+            exit(EXIT_FAILURE);
+        }
+        time_all += stopChrono(chrono);
+        if((receivedProbe = analyzeData(receivedData, probe)) < 0){
+            printf("Error due a format problem\n");
+        } else if(receivedProbe != probe){
+            printf("Received wrong probe. Resending the last correct probe");
+        }
+        probe++;
     }
     printf("Average RTT = %ld\n", time_all / probe);
     if( !strcmp(param.measure_type, MEASURE_THROUGHTPUT)){
-        printf("THROUGHTPUT = %lf\n", param.msg_size / (time_all / probe));
+        printf("THROUGHTPUT = %lf\n", param.msg_size / (time_all / (double) probe));
     }
     return 0;
 }
 int analyzeData(char *received, int probe){
     char phase;
     int recvProbe;
-    char *payload;
-    sscanf(received, measurement_message_format, &phase, &recvProbe, &payload);
+    char *payload = NULL;
+    sscanf(received, measurement_message_format, &phase, &recvProbe, payload);
     if(phase != PROTOCOL_PHASE_MEASURE){
+        printf("%c %d", phase, recvProbe);
         return -1;
     }
-    if(probe != recvProbe){
-        return -1;
-    }
-    return 1;
+    return probe;
 }
 
 int fillParam(int argc, char *argv[], param_t *param){
@@ -138,8 +143,9 @@ int fillParam(int argc, char *argv[], param_t *param){
     param->n_probes = 1024;
     param->msg_size = 256;
     param->server_delay = 0;
-    param->port = htons(atoi(argv[2]));
-    param->address = inet_addr(argv[1]);
+    param->server_addr.sin_family = AF_INET;
+    param->server_addr.sin_port = htons(atoi(argv[2]));
+    param->server_addr.sin_addr.s_addr = inet_addr(argv[1]);
     if( strcmp(argv[3], MEASURE_RTT) && strcmp(argv[3], MEASURE_THROUGHTPUT)){
         return -1;
     }
@@ -156,7 +162,7 @@ int fillParam(int argc, char *argv[], param_t *param){
             if(param->msg_size <= 0){
                 return -1;
             }
-        } else if(!strcmp(argv[i], "-d" || !strcmp(argv[i], "--delay"))){
+        } else if(!strcmp(argv[i], "-d") || !strcmp(argv[i], "--delay")){
             param->server_delay = atoi(argv[i + 1]);
         } else{
             return -1;
@@ -177,5 +183,7 @@ int sendHello(int sfd, const param_t *param, char *sendData, char *receivedData)
         if(strcmp(receivedData, "404 ERROR – Invalid Hello message")){
             printf("FATAL ERROR. Received message: \n%s", receivedData);
         }
+        return -1;
     }
+    return 1;
 }
