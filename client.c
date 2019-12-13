@@ -19,6 +19,7 @@
 
 #define HELLO_ACCEPTED "200 OK - Ready"
 #define HELLO_REFUSED "404 ERROR – Invalid Hello message"
+#define MEASURE_INVALID "404 ERROR - Invalid Measurement message"
 #define HELLO_MESSAGE_SIZE 27
 #define MEASURE_MESSAGE_SIZE 8 // without the payload
 
@@ -56,6 +57,8 @@ void initializePayload(char *str, ssize_t lenght);
 
 void startChrono(struct timeval *time);
 
+int isErrorMeasure(char *message);
+
 // Return the milliseocond passed.
 int stopChrono(struct timeval time);
 
@@ -67,8 +70,8 @@ int main(int argc, char *argv[]){
     struct timeval chrono;
     long int time_all;
     param_t param;
-    int probe = 1;
-    int receivedProbe; // Probe received as ACK
+    int probe = 0;
+    //int receivedProbe; // Probe received as ACK
     int rtt;
     int loss = 0;
     int measure_index = 0;
@@ -127,11 +130,18 @@ int main(int argc, char *argv[]){
                 printf("Connection closed by the server\n");
                 exit(EXIT_FAILURE);
             }
-
             rtt = stopChrono(chrono);
             time_all += rtt;
+
             //printf("%ld byte from %s probe_seq=%d rtt=%d ms\n", byteRecv, argv[1], probe, rtt);
             //fflush(stdout);
+            if(isErrorMeasure(receivedData)){
+                printf("Server closed the connection due an error on received probes\n");
+                close(sfd);
+                exit(EXIT_FAILURE);
+            }
+            /*  Here the client resend the message that have lost
+                I managed it for a mistake but I will keep it.
             if((receivedProbe = analyzeData(receivedData)) < 0){
                 printf("Error due a format problem\n");
             } else if(receivedProbe != probe){
@@ -139,7 +149,9 @@ int main(int argc, char *argv[]){
                 probe--;
                 loss++;
             }
+            */
             probe++;
+            if(probe == 15) probe++;
         }
         sendByeMessage(sfd, &param);
         printf("--- %s measure statistics ---\n", argv[1]);
@@ -245,4 +257,8 @@ int stopChrono(struct timeval time){
     }
     timersub(&endTime, &time, &res);
     return res.tv_sec * 1000 + res.tv_usec / 1000;
+}
+
+int isErrorMeasure(char *message){
+    return !strcmp(message, MEASURE_INVALID);
 }

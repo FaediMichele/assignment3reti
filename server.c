@@ -32,7 +32,7 @@ typedef struct{
 const char hello_message_format[] = "%c %s %d %d %d\n";
 
 /* <protocol_phase> <sp> <probe_seq_num> <sp> <payload>\n */
-const char measurement_message_format[] = "%c %d %s\n";
+const char measurement_message_format[] = "%c %d ";
 
 const char bye_message_response[] = "200 OK - Closing";
 
@@ -40,13 +40,24 @@ const char bye_message_response[] = "200 OK - Closing";
 const char bye_message_format[] = "%c\n";
 
 const char measure_accepted_m[] = "200 OK - Ready";
+const char measure_invalid[] = "404 ERROR - Invalid Measurement message";
 
 void open(char **argv, struct sockaddr_in *server_addr, int *sfd, socklen_t *cli_size);
 
+/*  Verify if the message is for the end phase
+    Return 0 in case of error
+*/
 int isByeMessage(char *message);
 
 int parseHello(char *message, param_t *param);
+
+
 int manageHello(int sfd, param_t *param);
+
+/*  Get the probe from a measurement message.
+    Return the probe else -1
+*/
+int getProbe(char *message);
 
 int main(int argc, char *argv[]) {
     struct sockaddr_in server_addr; // struct containing server address information
@@ -58,7 +69,10 @@ int main(int argc, char *argv[]) {
     socklen_t cli_size;
     param_t param;
     char client_add_s[INET_ADDRSTRLEN]; // String for the client address.
+    int client_port;
     int ok; // used like boolean
+    int probe_e = 0; // the probe expected
+    int probe_r = 0; // the probe received
 
     if(argc != 2){
         printf("Errore nei parametri\n");
@@ -72,14 +86,15 @@ int main(int argc, char *argv[]) {
     for(;;){
         printf("Waiting new request...\n");
         fflush(stdout);
+        probe_e = 0;
         // Wait for incoming requests
         if (( newsfd = accept(sfd, (struct sockaddr *) &client_addr, &cli_size)) < 0){
             perror("accept"); // Print error message
             exit(EXIT_FAILURE);
         }
-        
-        inet_ntop( AF_INET, &client_addr, client_add_s, INET_ADDRSTRLEN );
-        printf("Connection accepted: address: %s:%d\n", client_add_s, client_addr.sin_port);
+        client_port = (int) ntohs(client_addr.sin_port);
+        strcpy(client_add_s, inet_ntoa(client_addr.sin_addr));
+        printf("Connection accepted: address: %s:%d\n", client_add_s, client_port);
         
         if(!manageHello(newsfd, &param)){
             perror("Error with the hello");
@@ -96,29 +111,38 @@ int main(int argc, char *argv[]) {
             } else if (byteRecv == 0){
                 perror("Connection closed by client");
                 ok = 1;
-            }
-            if(isByeMessage(receivedData)){
-                break;
-            }
-            fwrite(receivedData, sizeof(char), param.msg_size, stdout);
-            usleep(param.delay * 1000);
-            fflush(stdout);
-            byteSent = send(newsfd, receivedData, param.msg_size, 0);
-            if(byteSent != byteRecv){
-                ok = 1;
+            } else {
+                if(isByeMessage(receivedData)){
+                    break;
+                }
+                
+                fwrite(receivedData, sizeof(char), param.msg_size, stdout);
+                usleep(param.delay * 1000);
+                fflush(stdout);
+                if((probe_r = getProbe(receivedData)) != probe_e){
+                    send(newsfd, measure_invalid, sizeof(measure_invalid), 0);
+                    printf("Error on probes: Expected %d. Received %d\n", probe_e, probe_r);
+                    ok = 1;
+                } else {
+                    byteSent = send(newsfd, receivedData, param.msg_size, 0);
+                    if(byteSent != byteRecv){
+                        ok = 1;
+                    }
+                }
             }
             if(ok){
                 close(newsfd);
                 newsfd = -1;
                 break;
             }
+            probe_e++;
         }
         if(newsfd < 0){
             continue;
         }
         send(newsfd, bye_message_response, sizeof(bye_message_response), 0);
         close(newsfd);
-        printf("Connection closed from: %s:%hu\n", client_add_s, client_addr.sin_port);
+        printf("Connection closed from: %s:%d\n", client_add_s, client_port);
     } // End of for(;;)
     close(sfd);
     return 0;
@@ -171,7 +195,7 @@ int parseHello(char *message, param_t *param) {
     int msg_size;
     int delay;
     int res = sscanf(message, hello_message_format, &phase, measure, &n_probes, &msg_size, &delay);
-    if(res < 0 || phase != 'h'){
+    if(res < 0 || phase != PROTOCOL_PHASE_HELLO){
         return 0;
     }
     param->delay = delay;
@@ -180,13 +204,11 @@ int parseHello(char *message, param_t *param) {
     return 1;
 }
 
-/*  Verify if the message is for the end phase
-    Return 0 in case of error
-*/
+
 int isByeMessage(char *message){
     char phase;
     int res = sscanf(message, bye_message_format, &phase);
-    if(res < 0 || phase != 'b'){
+    if(res < 0 || phase != PROTOCOL_PHASE_BYE){
         return 0;
     }
     return 1;
@@ -213,4 +235,14 @@ int manageHello(int sfd, param_t *param){
     }
     
     return 1;
+}
+
+int getProbe(char *message){
+    int probe = 0;
+    char phase;
+    int res = sscanf(message, measurement_message_format, &phase, &probe);
+    if(res < 0 || phase != PROTOCOL_PHASE_MEASURE){
+        return -1;
+    }
+    return probe;
 }
