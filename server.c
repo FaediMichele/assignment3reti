@@ -115,8 +115,6 @@ int main(int argc, char *argv[]) {
                 if(isByeMessage(receivedData)){
                     break;
                 }
-                
-                
 
                 // the if is used because even if delay is zero the usleep cause some delay
                 if(param.delay > 0) {
