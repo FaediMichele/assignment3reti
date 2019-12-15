@@ -60,7 +60,7 @@ void startChrono(struct timeval *time);
 int isErrorMeasure(char *message);
 
 // Return the milliseocond passed.
-int stopChrono(struct timeval time);
+double stopChrono(struct timeval time);
 
 int main(int argc, char *argv[]){
     int sfd; // Server socket filed descriptor
@@ -68,16 +68,17 @@ int main(int argc, char *argv[]){
     ssize_t byteSent; // Number of bytes sent
     socklen_t serv_size;
     struct timeval chrono;
-    long int time_all;
+    double time_all;
     param_t param;
     int probe = 0;
     //int receivedProbe; // Probe received as ACK
-    int rtt;
+    double rtt;
     int loss = 0;
     int measure_index = 0;
     
     if( fillParam(argc, argv, &param) < 0){
-        printf("%s: unrecognized paramether.\nUsage = ./client <server IP (dotted notation)> <server port> <measure type(rtt / thput)> [-d delay][-p n_probes]\n", argv[0]);
+        printf("%s: unrecognized paramether.\n", argv[0]);
+        printf("Usage = ./client <server IP (dotted notation)> [-d delay][-p n_probes] [-m measure(rtt / thput)]\n");
         exit(EXIT_FAILURE);
     }
     const int *measure_size_touse = strcmp(param.measure_type, MEASURE_RTT) ? 
@@ -85,6 +86,7 @@ int main(int argc, char *argv[]){
             measure_size_rtt;
     long n_measure = measure_size_touse == measure_size_rtt ? sizeof(measure_size_rtt) : sizeof(measure_size_thput);
     n_measure/=sizeof(int);
+    
     fflush(stdout);
     // for every payload size for the selected measure.
     for(measure_index = 0; measure_index < n_measure; measure_index++){
@@ -122,6 +124,7 @@ int main(int argc, char *argv[]){
                 perror("Error sending message");
                 exit(EXIT_FAILURE);
             }
+            
             byteRecv = recv(sfd, receivedData, msg_size, 0);
             if( byteRecv < 0){
                 perror("Error receiving message");
@@ -132,36 +135,36 @@ int main(int argc, char *argv[]){
             }
             rtt = stopChrono(chrono);
             time_all += rtt;
+            fwrite(receivedData, sizeof(char), msg_size, stdout);
 
-            //printf("%ld byte from %s probe_seq=%d rtt=%d ms\n", byteRecv, argv[1], probe, rtt);
-            //fflush(stdout);
+            printf("probe_seq=%d rtt=%lf ms\n", probe, rtt);
+            fflush(stdout);
             if(isErrorMeasure(receivedData)){
                 printf("Server closed the connection due an error on received probes\n");
                 close(sfd);
                 exit(EXIT_FAILURE);
             }
             /*  Here the client resend the message that have lost
-                I managed it for a mistake but I will keep it.
+                I managed it for a mistake but I will keep it. 
             if((receivedProbe = analyzeData(receivedData)) < 0){
                 printf("Error due a format problem\n");
             } else if(receivedProbe != probe){
                 printf("Received wrong probe. Resending the last correct probe(%d)\n", receivedProbe);
                 probe--;
                 loss++;
-            }
-            */
+            }*/
+            
             probe++;
-            if(probe == 15) probe++;
         }
         sendByeMessage(sfd, &param);
         printf("--- %s measure statistics ---\n", argv[1]);
-        printf("%d message trasmitted, %d%% message loss, %ld message size, rtt = %lims, time = %lims\n",
+        printf("%d message trasmitted, %d%% message loss, %ld message size, rtt = %gms, time = %gms\n",
             probe, loss * 100 / probe, msg_size - MEASURE_MESSAGE_SIZE,
-            1 + time_all / probe, time_all);
+            time_all / probe, time_all);
         if( !strcmp(param.measure_type, MEASURE_THROUGHTPUT)){
-            // the 1 + is in case of average time 0 and the /1000 is for kbps.
-            printf("--- average throughtput = %lf kbps\n",
-                ((double) msg_size) / (1 + time_all / (double) probe) / 1000);
+            // the /1000 is for kbps and *1000 for seconds.
+            printf("Average throughtput = %.04lf kbps\n",
+                ((double) msg_size) / ((time_all * 1000 / (double) probe) / 1000));
         }
         fflush(stdout);
         close(sfd);
@@ -183,7 +186,9 @@ int analyzeData(char *received){
 
 int fillParam(int argc, char *argv[], param_t *param){
     int i;
-    if (argc  < 3){
+    int measure_setted = 0;
+    
+    if (argc  < 3 || argc > 10 || argc % 2 != 1){
         return -1;
     }
     param->n_probes = 20;
@@ -192,12 +197,8 @@ int fillParam(int argc, char *argv[], param_t *param){
     param->server_addr.sin_family = AF_INET;
     param->server_addr.sin_port = htons(atoi(argv[2]));
     param->server_addr.sin_addr.s_addr = inet_addr(argv[1]);
-    if( strcmp(argv[3], MEASURE_RTT) && strcmp(argv[3], MEASURE_THROUGHTPUT)){
-        return -1;
-    }
-    strcpy(param->measure_type, argv[3]);
 
-    for(i = 4; i < argc; i+= 2){
+    for(i = 3; i < argc; i+= 2){
         if(!strcmp(argv[i], "-p") || !strcmp(argv[i], "--probes")){
             param->n_probes = atoi(argv[i + 1]);
             if(param->n_probes <= 0){
@@ -205,11 +206,39 @@ int fillParam(int argc, char *argv[], param_t *param){
             }
         } else if(!strcmp(argv[i], "-d") || !strcmp(argv[i], "--delay")){
             param->server_delay = atoi(argv[i + 1]);
+            if(param->server_delay < 0){
+                return -1;
+            }
+        } else if(!strcmp(argv[i], "-m") || !strcmp(argv[i], "--measure")){
+            printf("%s", argv[i + 1]);
+            if( !strcmp(argv[i + 1], MEASURE_RTT) || !strcmp(argv[i + 1], MEASURE_THROUGHTPUT)){
+                strcpy(param->measure_type, argv[i + 1]);
+                measure_setted = 1;
+            } else{
+                return -1;
+            }
         } else{
             return -1;
         }
     }
-    return argc - 3;
+
+    // if the paramether -m is not used it will be asked
+    if(!measure_setted){
+        int len1 = strlen(MEASURE_RTT);
+        int len2 = strlen(MEASURE_THROUGHTPUT);
+        char measure[len1 > len2 ? len1 : len2];
+        i = 0;
+        do{
+            printf("Witch measure (rtt / thput): ");
+            scanf("%s", measure);
+            if( strcmp(measure, MEASURE_RTT) && strcmp(measure, MEASURE_THROUGHTPUT)){
+                i = 1;
+            }
+        } while(i);
+        strncpy(param->measure_type, measure, sizeof(param->measure_type));
+    }
+
+    return argc - 2;
 }
 
 int sendHello(int sfd, const param_t *param, char *sendData, char *receivedData, const int *measure_size_touse){
@@ -250,13 +279,13 @@ void startChrono(struct timeval *time){
     }
 }
 
-int stopChrono(struct timeval time){
+double stopChrono(struct timeval time){
     struct timeval endTime, res;
     if(gettimeofday(&endTime, NULL) < 0){
         perror("Time");
     }
     timersub(&endTime, &time, &res);
-    return res.tv_sec * 1000 + res.tv_usec / 1000;
+    return ((double) res.tv_sec) * 1000 + ((double) res.tv_usec) / 1000;
 }
 
 int isErrorMeasure(char *message){

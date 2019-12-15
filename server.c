@@ -24,7 +24,7 @@
 
 typedef struct{
     unsigned long msg_size; // message size
-    int expected_probe;     // numbre of expected probe
+    int n_probes;     // numbre of expected probe
     int delay;              // time to wait to send the response
 } param_t;
 
@@ -116,9 +116,12 @@ int main(int argc, char *argv[]) {
                     break;
                 }
                 
-                fwrite(receivedData, sizeof(char), param.msg_size, stdout);
-                usleep(param.delay * 1000);
-                fflush(stdout);
+                
+
+                // the if is used because even if delay is zero the usleep cause some delay
+                if(param.delay > 0) {
+                    usleep(param.delay * 1000);
+                }
                 if((probe_r = getProbe(receivedData)) != probe_e){
                     send(newsfd, measure_invalid, sizeof(measure_invalid), 0);
                     printf("Error on probes: Expected %d. Received %d\n", probe_e, probe_r);
@@ -129,13 +132,16 @@ int main(int argc, char *argv[]) {
                         ok = 1;
                     }
                 }
+                fwrite(receivedData, sizeof(char), param.msg_size, stdout);
             }
             if(ok){
                 close(newsfd);
                 newsfd = -1;
                 break;
             }
-            probe_e++;
+            if(probe_e <param.n_probes){
+                probe_e++;
+            }
         }
         if(newsfd < 0){
             continue;
@@ -201,6 +207,7 @@ int parseHello(char *message, param_t *param) {
     param->delay = delay;
     fflush(stdout);
     param->msg_size = msg_size + MEASURE_MESSAGE_SIZE;
+    param->n_probes = n_probes;
     return 1;
 }
 
@@ -242,6 +249,7 @@ int getProbe(char *message){
     char phase;
     int res = sscanf(message, measurement_message_format, &phase, &probe);
     if(res < 0 || phase != PROTOCOL_PHASE_MEASURE){
+        printf("res %d - phase = %c\n--- %s ---", res, phase, message);
         return -1;
     }
     return probe;
