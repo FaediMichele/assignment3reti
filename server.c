@@ -41,6 +41,7 @@ const char bye_message_format[] = "%c\n";
 
 const char measure_accepted_m[] = "200 OK - Ready";
 const char measure_invalid[] = "404 ERROR - Invalid Measurement message";
+const char hello_invalid[] = "404 ERROR – Invalid Hello message"
 
 void open(char **argv, struct sockaddr_in *server_addr, int *sfd, socklen_t *cli_size);
 
@@ -225,17 +226,18 @@ int manageHello(int sfd, param_t *param){
     byteRecv = recv(sfd, helloMessage, HELLO_MESSAGE_SIZE, 0);
     if (byteRecv <= 0){
         printf("recv on hello\n");
+        send(sfd, hello_invalid, sizeof(hello_invalid), 0);
         return 0;
     }
     
     if(parseHello(helloMessage, param) < 0){
-        printf("hello message error\n");
+        send(sfd, hello_invalid, sizeof(hello_invalid), 0);
         return 0;
     }
     
     byteSent = send(sfd, measure_accepted_m, sizeof(measure_accepted_m), 0);
     if(byteSent <= 0){
-        printf("recv on hello\n");
+        printf("recv on hello\n");  
         return 0;
     }
     
